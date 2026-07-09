@@ -1,0 +1,239 @@
+<template>
+  <scroll class="page" scroll-y="true">
+    <text class="title">连通性验证</text>
+    <text class="base">{{baseUrl}}</text>
+
+    <div class="btn {{busy ? 'btn-disabled' : ''}}" onclick="runHealth">
+      <text class="btn-text">1. 健康探针 /health</text>
+    </div>
+    <div class="btn {{busy ? 'btn-disabled' : ''}}" onclick="runFullFlow">
+      <text class="btn-text">2. 建房+发牌+轮询</text>
+    </div>
+    <div class="btn {{poller ? 'btn-danger' : 'btn-ghost'}}" onclick="togglePoll">
+      <text class="btn-text">{{poller ? '停止轮询' : '(先跑步骤2)'}}</text>
+    </div>
+
+    <div class="status-row">
+      <text class="status-label">房间</text>
+      <text class="status-value">{{roomId || '--'}}</text>
+    </div>
+    <div class="status-row">
+      <text class="status-label">我的词</text>
+      <text class="status-value word">{{yourWord || '--'}}</text>
+    </div>
+    <div class="status-row">
+      <text class="status-label">阶段/版本</text>
+      <text class="status-value">{{phase || '--'}} / v{{version}}</text>
+    </div>
+
+    <text class="log-title">日志</text>
+    <text class="log-line" for="{{logs}}">{{$item}}</text>
+  </scroll>
+</template>
+
+<script>
+import * as api from '../../common/api.js'
+
+export default {
+  private: {
+    baseUrl: '',
+    busy: false,
+    logs: [],
+    roomId: '',
+    playerId: '',
+    yourWord: '',
+    phase: '',
+    version: 0,
+    poller: null
+  },
+
+  onInit() {
+    this.baseUrl = api.getBaseUrl()
+  },
+
+  onHide() {
+    this.stopPoll()
+  },
+
+  onDestroy() {
+    this.stopPoll()
+  },
+
+  log(msg) {
+    // 原地修改数组(避免整体重新赋值,见 vela-quality Q5)
+    this.logs.unshift(msg)
+    if (this.logs.length > 30) this.logs.pop()
+  },
+
+  runHealth() {
+    if (this.busy) return
+    this.busy = true
+    this.log('→ GET /health ...')
+    api.health()
+      .then(({ data }) => {
+        this.log('✓ health ok, rooms=' + (data && data.rooms))
+      })
+      .catch((err) => {
+        this.log('✗ health 失败 code=' + err.code)
+        this.log('  提示:确认服务端已启动、URL 用 HTTPS、证书 SAN 含本机 IP')
+      })
+      .finally(() => { this.busy = false })
+  },
+
+  // 单机自驱:建房 → 自己 join 两个玩家 → 开局 → 开轮询
+  runFullFlow() {
+    if (this.busy) return
+    this.busy = true
+    this.stopPoll()
+    this.log('→ 创建房间 ...')
+    api.createRoom('主持人')
+      .then(({ data }) => {
+        this.roomId = data.roomId
+        this.playerId = data.playerId
+        this.log('✓ 房间 ' + data.roomId + ' host=' + data.playerId)
+        return api.joinRoom(this.roomId, '玩家B')
+      })
+      .then(() => api.joinRoom(this.roomId, '玩家C'))
+      .then(() => {
+        this.log('✓ 已加入 3 人,开局发牌 ...')
+        return api.startGame(this.roomId, this.playerId)
+      })
+      .then(() => {
+        this.log('✓ 开局成功,启动轮询')
+        this.startPoll()
+      })
+      .catch((err) => {
+        this.log('✗ 流程失败 code=' + err.code + ' ' + JSON.stringify(err.data || {}))
+      })
+      .finally(() => { this.busy = false })
+  },
+
+  startPoll() {
+    if (this.poller) return
+    this.poller = api.createPoller(this.roomId, this.playerId, {
+      interval: 1200,
+      onUpdate: (view) => {
+        this.version = view.version
+        this.phase = view.phase
+        if (view.yourWord) this.yourWord = view.yourWord
+        this.log('⟳ v' + view.version + ' ' + view.status + '/' + view.phase +
+          (view.yourWord ? ' 词=' + view.yourWord : ''))
+      },
+      onError: (err, failCount) => {
+        this.log('⚠ 轮询失败 x' + failCount + ' code=' + err.code)
+      }
+    })
+    this.poller.start()
+  },
+
+  stopPoll() {
+    if (this.poller) {
+      this.poller.stop()
+      this.poller = null
+    }
+  },
+
+  togglePoll() {
+    if (this.poller) {
+      this.stopPoll()
+      this.log('■ 已停止轮询')
+    } else if (this.roomId) {
+      this.startPoll()
+      this.log('▶ 恢复轮询')
+    }
+  }
+}
+</script>
+
+<style>
+.page {
+  width: 480px;
+  height: 480px;
+  flex-direction: column;
+  background-color: #000000;
+  padding-top: 48px;
+  padding-bottom: 48px;
+  padding-left: 36px;
+  padding-right: 36px;
+}
+
+.title {
+  font-size: 30px;
+  font-weight: bold;
+  color: #ffffff;
+  margin-bottom: 4px;
+}
+
+.base {
+  font-size: 18px;
+  color: #666666;
+  margin-bottom: 16px;
+}
+
+.btn {
+  width: 100%;
+  height: 60px;
+  justify-content: center;
+  align-items: center;
+  background-color: #4CAF50;
+  border-radius: 30px;
+  margin-bottom: 12px;
+}
+
+.btn-ghost {
+  background-color: #1a1a1a;
+}
+
+.btn-danger {
+  background-color: #FF6B6B;
+}
+
+.btn-disabled {
+  background-color: #333333;
+}
+
+.btn-text {
+  font-size: 24px;
+  color: #ffffff;
+}
+
+.status-row {
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
+  height: 40px;
+  border-radius: 8px;
+  background-color: #111111;
+  padding-left: 16px;
+  padding-right: 16px;
+  margin-bottom: 8px;
+}
+
+.status-label {
+  font-size: 20px;
+  color: #888888;
+}
+
+.status-value {
+  font-size: 22px;
+  color: #ffffff;
+}
+
+.word {
+  color: #4CAF50;
+  font-weight: bold;
+}
+
+.log-title {
+  font-size: 20px;
+  color: #888888;
+  margin-top: 12px;
+  margin-bottom: 6px;
+}
+
+.log-line {
+  font-size: 18px;
+  color: #bbbbbb;
+  margin-bottom: 4px;
+}
+</style>

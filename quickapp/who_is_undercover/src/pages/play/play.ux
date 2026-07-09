@@ -1,0 +1,370 @@
+<template>
+  <div class="page">
+    <!-- ===== 描述阶段 ===== -->
+    <div class="phase" if="{{phase === 'describe'}}">
+      <text class="round">第 {{round}} 轮 · 描述</text>
+      <text class="order-label">发言顺序</text>
+      <scroll class="order-list" scroll-y="true">
+        <div class="order-item" for="{{order}}">
+          <text class="order-idx">{{$idx + 1}}</text>
+          <text class="order-name">{{$item.name}}</text>
+        </div>
+      </scroll>
+      <div class="action-btn" onclick="goVote">
+        <text class="action-text">开始投票</text>
+      </div>
+    </div>
+
+    <!-- ===== 投票阶段(传表逐人投票)===== -->
+    <div class="phase" if="{{phase === 'vote'}}">
+      <text class="round">第 {{round}} 轮 · 投票</text>
+      <text class="who">轮到 {{voterName}} 投票</text>
+      <scroll class="vote-list" scroll-y="true">
+        <div class="vote-item {{pickedId === $item.id ? 'vote-picked' : ''}}" for="{{voteTargets}}" onclick="pickTarget($item.id)">
+          <text class="vote-name">{{$item.name}}</text>
+        </div>
+      </scroll>
+    </div>
+
+    <!-- ===== 公布阶段 ===== -->
+    <div class="phase" if="{{phase === 'reveal'}}">
+      <text class="round">第 {{round}} 轮 · 公布</text>
+      <text class="out-info" if="{{outName}}">{{outName}} 被投出局</text>
+      <text class="out-info" else>平票,本轮无人出局</text>
+      <text class="out-role" if="{{outRole}}">身份:{{outRole}}</text>
+      <div class="action-btn" onclick="nextRound">
+        <text class="action-text">下一轮</text>
+      </div>
+    </div>
+
+    <!-- ===== 结束 ===== -->
+    <div class="phase" if="{{phase === 'finished'}}">
+      <text class="win-title">{{winnerText}}</text>
+      <scroll class="reveal-list" scroll-y="true">
+        <div class="reveal-item" for="{{allPlayers}}">
+          <text class="reveal-name">{{$item.name}}</text>
+          <text class="reveal-role {{$item.role === 'undercover' ? 'role-under' : 'role-civ'}}">
+            {{$item.role === 'undercover' ? '卧底' : '平民'}} · {{$item.word}}
+          </text>
+        </div>
+      </scroll>
+      <div class="action-btn" onclick="backHome">
+        <text class="action-text">再来一局</text>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script>
+import router from '@system.router'
+import vibrator from '@system.vibrator'
+import game from '../../common/game.js'
+
+export default {
+  private: {
+    phase: 'describe',
+    round: 1,
+    order: [],
+    // 投票流程
+    voters: [],        // 本轮存活投票者队列
+    voterIdx: 0,
+    voterName: '',
+    voteTargets: [],
+    pickedId: '',      // 当前选中的投票目标(高亮反馈)
+    pickedTimer: null,
+    // 公布
+    outName: '',
+    outRole: '',
+    winnerText: '',
+    allPlayers: []
+  },
+
+  onInit() {
+    this.syncFromGame()
+  },
+
+  onDestroy() {
+    this.clearPickedTimer()
+  },
+
+  syncFromGame() {
+    const s = game.getState()
+    this.round = s.round
+    if (s.status === 'describe') {
+      this.enterDescribe()
+    }
+  },
+
+  // ---- 描述 ----
+  enterDescribe() {
+    this.phase = 'describe'
+    this.order = game.aliveInOrder().map((p) => ({ name: p.name }))
+    this.vibrate('short')
+  },
+
+  // ---- 投票 ----
+  goVote() {
+    game.toVoting()
+    this.voters = game.aliveInOrder().map((p) => ({ id: p.id, name: p.name }))
+    this.voterIdx = 0
+    this.loadVoter()
+    this.phase = 'vote'
+    this.vibrate('short')
+  },
+
+  loadVoter() {
+    // 切换投票者时重置选中态
+    this.pickedId = ''
+    this.clearPickedTimer()
+    const voter = this.voters[this.voterIdx]
+    this.voterName = voter ? voter.name : ''
+    // 候选=存活玩家中除自己外
+    this.voteTargets = game.aliveInOrder()
+      .filter((p) => p.id !== (voter && voter.id))
+      .map((p) => ({ id: p.id, name: p.name }))
+  },
+
+  pickTarget(targetId) {
+    const voter = this.voters[this.voterIdx]
+    if (!voter) return
+    if (this.pickedId) return // 防重复点击
+    // 选中高亮,短暂延迟后推进,让玩家看清投了谁
+    this.pickedId = targetId
+    this.pickedTimer = setTimeout(() => {
+      this.pickedId = ''
+      this.pickedTimer = null
+      game.castVote(voter.id, targetId)
+      this.voterIdx += 1
+      if (this.voterIdx >= this.voters.length) {
+        this.revealResult()
+      } else {
+        this.loadVoter()
+      }
+    }, 200)
+  },
+
+  clearPickedTimer() {
+    if (this.pickedTimer) {
+      clearTimeout(this.pickedTimer)
+      this.pickedTimer = null
+    }
+  },
+
+  // ---- 公布 ----
+  revealResult() {
+    game.toReveal()
+    const s = game.getState()
+    if (s.lastOut) {
+      const p = game.getPlayer(s.lastOut)
+      this.outName = p ? p.name : ''
+      this.outRole = p ? (p.role === 'undercover' ? '卧底' : '平民') : ''
+    } else {
+      this.outName = ''
+      this.outRole = ''
+    }
+    this.vibrate('long')
+
+    if (s.status === 'finished') {
+      this.showFinished(s)
+    } else {
+      this.phase = 'reveal'
+    }
+  },
+
+  nextRound() {
+    game.nextRound()
+    this.round = game.getState().round
+    this.enterDescribe()
+  },
+
+  // ---- 结束 ----
+  showFinished(s) {
+    this.phase = 'finished'
+    this.winnerText = s.lastWinner === 'undercover' ? '卧底获胜' : '平民获胜'
+    this.allPlayers = s.players.map((p) => ({
+      name: p.name,
+      role: p.role,
+      word: p.word
+    }))
+  },
+
+  backHome() {
+    game.reset()
+    router.replace({ uri: '/pages/setup' })
+  },
+
+  vibrate(mode) {
+    try {
+      vibrator.vibrate({ mode: mode || 'short' })
+    } catch (e) {
+      // 忽略不支持
+    }
+  }
+}
+</script>
+
+<style>
+.page {
+  width: 480px;
+  height: 480px;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  background-color: #000000;
+  padding-top: 40px;
+  padding-bottom: 40px;
+  padding-left: 36px;
+  padding-right: 36px;
+}
+
+.phase {
+  width: 100%;
+  height: 100%;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+}
+
+.round {
+  font-size: 24px;
+  color: #888888;
+  margin-bottom: 8px;
+}
+
+.order-label {
+  font-size: 20px;
+  color: #888888;
+  margin-bottom: 8px;
+}
+
+.order-list {
+  width: 320px;
+  height: 180px;
+  flex-direction: column;
+}
+
+.order-item {
+  width: 100%;
+  height: 48px;
+  flex-direction: row;
+  align-items: center;
+  background-color: #111111;
+  border-radius: 10px;
+  margin-bottom: 8px;
+  padding-left: 16px;
+}
+
+.order-idx {
+  width: 36px;
+  font-size: 22px;
+  color: #4CAF50;
+}
+
+.order-name {
+  font-size: 24px;
+  color: #ffffff;
+}
+
+.who {
+  font-size: 26px;
+  color: #aaaaaa;
+  margin-bottom: 12px;
+}
+
+.vote-list {
+  width: 340px;
+  height: 300px;
+  flex-direction: column;
+}
+
+.vote-item {
+  width: 100%;
+  height: 60px;
+  justify-content: center;
+  align-items: center;
+  background-color: #1a1a1a;
+  border-radius: 30px;
+  margin-bottom: 10px;
+}
+
+.vote-name {
+  font-size: 26px;
+  color: #ffffff;
+}
+
+.vote-picked {
+  background-color: #4CAF50;
+}
+
+.out-info {
+  font-size: 32px;
+  font-weight: bold;
+  color: #ffffff;
+  margin-bottom: 8px;
+}
+
+.out-role {
+  font-size: 24px;
+  color: #FFB74D;
+  margin-bottom: 20px;
+}
+
+.win-title {
+  font-size: 36px;
+  font-weight: bold;
+  color: #4CAF50;
+  margin-bottom: 16px;
+}
+
+.reveal-list {
+  width: 360px;
+  height: 240px;
+  flex-direction: column;
+}
+
+.reveal-item {
+  width: 100%;
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
+  height: 46px;
+  background-color: #111111;
+  border-radius: 10px;
+  margin-bottom: 8px;
+  padding-left: 16px;
+  padding-right: 16px;
+}
+
+.reveal-name {
+  font-size: 22px;
+  color: #ffffff;
+}
+
+.reveal-role {
+  font-size: 20px;
+}
+
+.role-under {
+  color: #FF6B6B;
+}
+
+.role-civ {
+  color: #888888;
+}
+
+.action-btn {
+  width: 240px;
+  height: 64px;
+  justify-content: center;
+  align-items: center;
+  background-color: #4CAF50;
+  border-radius: 32px;
+  margin-top: 24px;
+}
+
+.action-text {
+  font-size: 26px;
+  font-weight: bold;
+  color: #ffffff;
+}
+</style>

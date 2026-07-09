@@ -1,0 +1,10 @@
+/node_modules
+/build
+/coverage
+/.nyc_output
+
+# debug 包不提交，参赛提交只需要生产模式打包的 release.rpk
+dist/*.debug.*.rpk
+
+# 自签名开发证书为本地私钥，不入库；用 server/gen-cert.sh 重新生成
+server/certs/*.pem

@@ -1,0 +1,50 @@
+{
+  "package": "com.vela.party.undercover",
+  "name": "腕上谁是卧底",
+  "versionName": "1.0.0",
+  "versionCode": 1,
+  "minPlatformVersion": 1200,
+  "icon": "/common/logo.png",
+  "simulationVersion": "default",
+  "deviceTypeList": [
+    "watch"
+  ],
+  "features": [
+    {
+      "name": "system.router"
+    },
+    {
+      "name": "system.prompt"
+    },
+    {
+      "name": "system.configuration"
+    },
+    {
+      "name": "system.fetch"
+    },
+    {
+      "name": "system.vibrator"
+    }
+  ],
+  "config": {
+    "logLevel": "log",
+    "designWidth": 480
+  },
+  "router": {
+    "entry": "pages/setup",
+    "pages": {
+      "pages/setup": {
+        "component": "setup"
+      },
+      "pages/deal": {
+        "component": "deal"
+      },
+      "pages/play": {
+        "component": "play"
+      },
+      "pages/conncheck": {
+        "component": "conncheck"
+      }
+    }
+  }
+}
